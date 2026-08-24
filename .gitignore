@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environment
+venv/
+.venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+
+# Python tooling
+.pytest_cache/
+.mypy_cache/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Runtime/generated files
+*.log
+
+# Local secrets/config
+.env
+
+# Temporary files
+*.tmp
+*.temp
+
+# Face data / biometric information
+phase2/encodings.pkl
+phase2/known_faces/*
+!phase2/known_faces/.gitkeep
