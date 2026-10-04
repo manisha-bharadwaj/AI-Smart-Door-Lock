@@ -7,6 +7,14 @@ import time
 from collections import deque
 import numpy as np
 
+from phase4.access_control import (
+    AccessDecision,
+    AccessResult,
+    evaluate_access,
+    verify_pin,
+)
+from phase4.pin_window import PinWindow
+
 
 # ============================================================
 # FILE PATHS
@@ -172,6 +180,29 @@ multiple_faces_detected = False
 
 
 # ============================================================
+# PHASE 4: ADAPTIVE SECURITY STATE & PIN WINDOW
+# ============================================================
+
+pin_window = PinWindow()
+pin_verified = False
+pin_attempt_failed = False
+pin_failed_time = 0.0
+
+
+def reset_pin():
+    global pin_verified
+    global pin_attempt_failed
+    global pin_failed_time
+
+    pin_verified = False
+    pin_attempt_failed = False
+    pin_failed_time = 0.0
+
+    if pin_window is not None:
+        pin_window.hide()
+
+
+# ============================================================
 # RESET LIVENESS
 # ============================================================
 
@@ -190,6 +221,8 @@ def reset_liveness():
     liveness_verified = False
     liveness_time = None
 
+    reset_pin()
+
 
 # ============================================================
 # RESET IDENTITY
@@ -204,6 +237,8 @@ def reset_identity():
     last_authorized_time = 0
 
     recognition_history.clear()
+
+    reset_pin()
 
 
 # ============================================================
@@ -232,10 +267,11 @@ cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
 print()
 print("======================================")
 print("AI SMART DOOR LOCK")
-print("INTEGRATED PHASE 1 + 2 + 3")
+print("INTEGRATED PHASE 1 + 2 + 3 + 4")
 print("======================================")
 print("Press Q to quit.")
 print("Press R to reset.")
+print("Press P to open PIN verification window.")
 print("======================================")
 print()
 
@@ -270,6 +306,36 @@ cv2.setWindowProperty(
 # ============================================================
 
 while True:
+
+    # --------------------------------------------------------
+    # Non-blocking Tkinter PIN window update & event polling
+    # --------------------------------------------------------
+    pin_window.update()
+
+    pin_event = pin_window.poll_event()
+    if pin_event == "SUCCESS":
+        # Only accept if current authentication attempt is still valid!
+        if (
+            stable_name != "Unknown"
+            and liveness_verified
+            and not multiple_faces_detected
+        ):
+            pin_verified = True
+            pin_attempt_failed = False
+            print("✅ PIN verified! Access granted.")
+        else:
+            pin_verified = False
+            pin_attempt_failed = True
+            pin_failed_time = time.time()
+            print("❌ Authentication state invalid. PIN discarded.")
+    elif pin_event == "FAILED":
+        pin_verified = False
+        pin_attempt_failed = True
+        pin_failed_time = time.time()
+    elif pin_event == "CANCELLED":
+        pin_verified = False
+        pin_attempt_failed = True
+        pin_failed_time = time.time()
 
     ret, frame = cap.read()
 
@@ -769,55 +835,74 @@ while True:
 
 
     # ========================================================
-    # FINAL SECURITY CONDITION
+    # PHASE 4: ADAPTIVE ACCESS EVALUATION
     # ========================================================
 
-    access_ready = (
-        stable_name != "Unknown"
-        and liveness_verified
-        and not multiple_faces_detected
+    access_result = evaluate_access(
+        face_count=face_count,
+        identity=stable_name,
+        liveness_verified=liveness_verified,
+        pin_verified=pin_verified,
+        authorized_names=known_names,
     )
+
+    # Determine status messages and colors for camera & door display
+    if multiple_faces_detected:
+        cam_access_text = "ACCESS: DENIED (MULTIPLE FACES)"
+        access_text = "ACCESS: DENIED"
+        access_color = (0, 0, 255)
+
+    elif access_result.decision == AccessDecision.GRANT:
+        cam_access_text = "ACCESS: GRANTED"
+        access_text = "ACCESS: GRANTED"
+        access_color = (0, 255, 0)
+
+    elif access_result.decision == AccessDecision.REQUIRE_PIN:
+        if pin_attempt_failed and (time.time() - pin_failed_time < 3.0):
+            cam_access_text = "ACCESS: INCORRECT PIN"
+            access_text = "INCORRECT PIN"
+            access_color = (0, 0, 255)
+        elif pin_window.is_visible():
+            cam_access_text = "ACCESS: PIN WINDOW OPEN"
+            access_text = "PIN REQUIRED"
+            access_color = (0, 215, 255)
+        else:
+            cam_access_text = "ACCESS: PIN REQUIRED (PRESS P)"
+            access_text = "PIN REQUIRED"
+            access_color = (0, 215, 255)
+
+    else:  # AccessDecision.DENY
+        if face_count == 0:
+            cam_access_text = "ACCESS: WAITING"
+            access_text = "ACCESS: NOT READY"
+            access_color = (180, 180, 180)
+        elif stable_name == "Unknown":
+            cam_access_text = "ACCESS: DENIED (UNAUTHORIZED)"
+            access_text = "ACCESS: DENIED"
+            access_color = (0, 0, 255)
+        elif not liveness_verified:
+            cam_access_text = "ACCESS: NOT READY (LIVENESS)"
+            access_text = "ACCESS: NOT READY"
+            access_color = (0, 255, 255)
+        else:
+            cam_access_text = "ACCESS: DENIED"
+            access_text = "ACCESS: DENIED"
+            access_color = (0, 0, 255)
 
 
     # ========================================================
     # DISPLAY FINAL ACCESS STATE ON CAMERA
     # ========================================================
 
-    if multiple_faces_detected:
-
-        cv2.putText(
-            frame,
-            "ACCESS: DENIED",
-            (20, 220),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.8,
-            (0, 0, 255),
-            2
-        )
-
-    elif access_ready:
-
-        cv2.putText(
-            frame,
-            "ACCESS: GRANTED",
-            (20, 220),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.8,
-            (0, 255, 0),
-            2
-        )
-
-    else:
-
-        cv2.putText(
-            frame,
-            "ACCESS: NOT READY",
-            (20, 220),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.8,
-            (0, 255, 255),
-            2
-        )
+    cv2.putText(
+        frame,
+        cam_access_text,
+        (20, 220),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.8,
+        access_color,
+        2
+    )
 
 
     # ========================================================
@@ -862,7 +947,7 @@ while True:
     )
 
 
-    subtitle = "PHASE 1 + 2 + 3 INTEGRATED"
+    subtitle = "PHASE 1 + 2 + 3 + 4 INTEGRATED"
 
     subtitle_size = cv2.getTextSize(
         subtitle,
@@ -1075,37 +1160,6 @@ while True:
     # ACCESS STATUS
     # ========================================================
 
-    if multiple_faces_detected:
-
-        access_text = "ACCESS: DENIED"
-
-        access_color = (
-            0,
-            0,
-            255
-        )
-
-    elif access_ready:
-
-        access_text = "ACCESS: GRANTED"
-
-        access_color = (
-            0,
-            255,
-            0
-        )
-
-    else:
-
-        access_text = "ACCESS: NOT READY"
-
-        access_color = (
-            0,
-            255,
-            255
-        )
-
-
     access_size = cv2.getTextSize(
         access_text,
         cv2.FONT_HERSHEY_SIMPLEX,
@@ -1118,7 +1172,6 @@ while True:
         + camera_width
         - access_size[0]
     )
-
 
     cv2.putText(
         door_display,
@@ -1135,7 +1188,13 @@ while True:
     # KEYBOARD HELP
     # ========================================================
 
-    controls = "Q - Quit    |    R - Reset"
+    if access_result.decision == AccessDecision.REQUIRE_PIN:
+        if pin_window.is_visible():
+            controls = "Q - Quit   |   R - Reset   |   PIN Window Active"
+        else:
+            controls = "Q - Quit   |   R - Reset   |   P - Open PIN Window"
+    else:
+        controls = "Q - Quit   |   R - Reset"
 
     controls_size = cv2.getTextSize(
         controls,
@@ -1183,10 +1242,18 @@ while True:
 
         reset_identity()
         reset_liveness()
+        reset_pin()
 
         multiple_faces_detected = False
 
         print("System reset.")
+
+    if key in (ord("p"), ord("P")):
+
+        if access_result.decision == AccessDecision.REQUIRE_PIN:
+            pin_window.show()
+        else:
+            print("\n[NOTICE] PIN is not required at this time (face and liveness must pass first).")
 
 
 # ============================================================
@@ -1197,4 +1264,6 @@ cap.release()
 
 landmarker.close()
 
-cv2.destroyAllWindows()
+pin_window.destroy()
+
+cv2.destroyAllWindows()

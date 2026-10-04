@@ -8,3 +8,7 @@ face-recognition==1.3.0
 
 # Serial communication (required for future Arduino phase)
 pyserial
+
+# Environment & Configuration (Phase 4)
+python-dotenv>=1.0.0
+
